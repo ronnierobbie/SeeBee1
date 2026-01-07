@@ -36,6 +36,7 @@ if check_password():
         .glass-card {
             background: rgba(255, 255, 255, 0.45);
             backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
             border: 1px solid rgba(255, 255, 255, 0.7);
             border-radius: 20px;
             padding: 20px;
@@ -65,8 +66,10 @@ if check_password():
             string_cols = ['State', 'Session_Division', 'Location_Name', 'Location_Type', 'Hardware_Item', 'Status']
             for col in string_cols:
                 if col in df.columns: df[col] = df[col].astype(str).str.strip()
+            
             if 'State' in df.columns: df['State'] = df['State'].replace('nan', pd.NA).ffill()
             if 'Session_Division' in df.columns: df['Session_Division'] = df['Session_Division'].replace('nan', pd.NA).ffill()
+
             numeric_cols = ['Required_Qty', 'Distributed_Qty', 'Balance_Qty', 'Courts_Count', 'Family_Courts', 'TJOs', 'Total_Courts']
             for col in numeric_cols:
                 if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
@@ -77,7 +80,7 @@ if check_password():
 
     df = load_data()
 
-    # --- 4. Export Functionality ---
+    # --- 4. Export Helper ---
     def to_excel(df):
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -91,51 +94,63 @@ if check_password():
         html = f"""<div class="glass-card"><div class="card-title">{title}</div><div class="card-value">{int(value_top)} / {int(value_bottom)}</div><span class="badge {b_class}">{b_text}: {int(abs(balance))}</span></div>"""
         st.markdown(html, unsafe_allow_html=True)
 
-    # --- 5. Main Content Logic ---
+    # --- 5. Navigation & Logic ---
     if df is not None:
-        # Sidebar with Default Selection
         st.sidebar.title("Navigation")
+        
+        # State Filter - Default to "All States"
         unique_states = ['All States'] + sorted(df['State'].unique().tolist())
-        sel_state = st.sidebar.selectbox("Select State", unique_states, index=0) # Default: All States
+        sel_state = st.sidebar.selectbox("Select State", unique_states, index=0)
         
         state_df = df if sel_state == 'All States' else df[df['State'] == sel_state]
         
-        unique_divs = ['📊 Overall Summary'] + sorted(state_df['Session_Division'].unique().tolist())
-        sel_div = st.sidebar.selectbox("Select Session Division", unique_divs, index=0) # Default: Summary
+        # Location/Division Filter - Default to "Overall Summary"
+        unique_locs = ['📊 Overall Summary'] + sorted(state_df['Location_Name'].unique().tolist())
+        sel_loc = st.sidebar.selectbox("Select Location", unique_locs, index=0)
 
-        st.title("⚖️ Court Inventory Dashboard")
+        st.title("🏛️ Court Inventory Dashboard")
 
-        # Handle View Logic
-        if sel_div == '📊 Overall Summary':
-            st.markdown(f'<div class="section-header">🌍 Global Aggregated Summary: {sel_state}</div>', unsafe_allow_html=True)
+        # Handle filtering for data display
+        if sel_loc == '📊 Overall Summary':
+            st.markdown(f'<div class="section-header">🌍 Overall Summary: {sel_state}</div>', unsafe_allow_html=True)
             display_df = state_df
         else:
-            st.markdown(f'<div class="section-header">🏢 District Detail: {sel_div}</div>', unsafe_allow_html=True)
-            display_df = state_df[state_df['Session_Division'] == sel_div]
+            st.markdown(f'<div class="section-header">📍 Location Detail: {sel_loc}</div>', unsafe_allow_html=True)
+            display_df = state_df[state_df['Location_Name'] == sel_loc]
 
-        # DISTRICT TOTALS
-        unique_locs = display_df.drop_duplicates(subset=['Location_Name'])
+        # --- Metrics Row ---
+        # Dropping duplicates by location to count courts correctly
+        court_counts_df = display_df.drop_duplicates(subset=['Location_Name'])
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total Courts", int(unique_locs['Total_Courts'].sum()))
-        m2.metric("Regular", int(unique_locs['Courts_Count'].sum()))
-        m3.metric("Family", int(unique_locs['Family_Courts'].sum()))
-        m4.metric("TJOs", int(unique_locs['TJOs'].sum()))
+        m1.metric("Total Courts", int(court_counts_df['Total_Courts'].sum()))
+        m2.metric("Regular", int(court_counts_df['Courts_Count'].sum()))
+        m3.metric("Family", int(court_counts_df['Family_Courts'].sum()))
+        m4.metric("TJOs", int(court_counts_df['TJOs'].sum()))
 
-        agg_hw = display_df.groupby('Hardware_Item')[['Distributed_Qty', 'Required_Qty', 'Balance_Qty']].sum().reset_index()
-        cols = st.columns(6)
-        for idx, row in agg_hw.iterrows():
-            with cols[idx % 6]:
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # --- Hardware Cards ---
+        # Grouping by hardware item for current selection
+        hw_summary = display_df.groupby('Hardware_Item')[['Distributed_Qty', 'Required_Qty', 'Balance_Qty']].sum().reset_index()
+        cols = st.columns(4)
+        for idx, row in hw_summary.iterrows():
+            with cols[idx % 4]:
                 render_glass_card(row['Hardware_Item'], row['Distributed_Qty'], row['Required_Qty'], row['Balance_Qty'])
 
-        # Detailed Table Fix
-        st.markdown(f'<div class="section-header">📋 Detailed Records List</div>', unsafe_allow_html=True)
-        final_table = display_df[['Session_Division', 'Location_Name', 'Hardware_Item', 'Required_Qty', 'Distributed_Qty', 'Balance_Qty', 'Status']]
+        # --- Detailed Table ---
+        st.markdown(f'<div class="section-header">📋 Detailed Records</div>', unsafe_allow_html=True)
+        # Select key columns and display
+        table_cols = ['Session_Division', 'Location_Name', 'Hardware_Item', 'Required_Qty', 'Distributed_Qty', 'Balance_Qty', 'Status']
+        final_table = display_df[table_cols]
         st.dataframe(final_table, use_container_width=True, hide_index=True)
 
-        # Download Center
+        # --- Download Center ---
         st.markdown("### 📥 Download Center")
         c1, c2 = st.columns(2)
         with c1:
-            st.download_button(label="Download as CSV", data=final_table.to_csv(index=False), file_name=f"court_data_{sel_div}.csv", mime="text/csv")
+            st.download_button(label="Download CSV", data=final_table.to_csv(index=False), file_name="inventory_data.csv", mime="text/csv")
         with c2:
-            st.download_button(label="Download as Excel", data=to_excel(final_table), file_name=f"court_data_{sel_div}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            st.download_button(label="Download Excel", data=to_excel(final_table), file_name="inventory_data.xlsx")
+
+    else:
+        st.error("Data could not be loaded. Please check data.xlsx.")
